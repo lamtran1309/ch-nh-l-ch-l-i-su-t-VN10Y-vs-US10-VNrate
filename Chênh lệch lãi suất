@@ -466,18 +466,19 @@ if barstate.islast
         if not na(layer_table)
             table.delete(layer_table)
         
-        // Tạo bảng mới
-        guide_table := table.new(position.middle_right, 3, 12, 
-             bgcolor=color.new(#2E3B4E, 95), 
-             border_width=1, 
-             border_color=color.new(#FFFFFF, 30))
-        
+        // ===== BẢNG KẾT QUẢ PHÂN TÍCH (vị trí trên cùng bên phải) =====
         layer_table := table.new(position.top_right, 4, 8,
              bgcolor=color.new(#1A237E, 95),
              border_width=2,
              border_color=color.white)
         
-        // ===== BẢNG HƯỚNG DẪN =====
+        // ===== BẢNG HƯỚNG DẪN (vị trí dưới cùng bên phải) =====
+        guide_table := table.new(position.bottom_right, 3, 12, 
+             bgcolor=color.new(#2E3B4E, 95), 
+             border_width=1, 
+             border_color=color.new(#FFFFFF, 30))
+        
+        // ===== NỘI DUNG BẢNG HƯỚNG DẪN =====
         table.merge_cells(guide_table, 0, 0, 2, 0)
         table.cell(guide_table, 0, 0, " 📊 HƯỚNG DẪN ĐỌC 3 LỚP RỦI RO ", 
              bgcolor=color.new(#1E88E5, 0), text_color=color.white, text_size=size.normal)
@@ -539,7 +540,7 @@ if barstate.islast
         table.cell(guide_table, 0, 11, application_text, 
              bgcolor=color.new(#37474F, 60), text_color=color.white, text_size=size.tiny)
         
-        // ===== BẢNG KẾT QUẢ PHÂN TÍCH =====
+        // ===== NỘI DUNG BẢNG KẾT QUẢ PHÂN TÍCH =====
         table.merge_cells(layer_table, 0, 0, 3, 0)
         table.cell(layer_table, 0, 0, " 📈 PHÂN TÍCH 3 LỚP RỦI RO - KẾT QUẢ ", 
              bgcolor=color.new(#0D47A1, 0), text_color=color.white, text_size=size.normal)
