@@ -1,6 +1,6 @@
 //@version=5
-indicator("Macro Alert System v4.0.0 - Academic w/ VN02Y & 3-Layer Risk",
-     shorttitle="MacroAcademic v4.0.0", overlay=false, max_labels_count=500, max_lines_count=500)
+indicator("Macro Alert System v4.2.0 - Academic w/ Panel-specific Tables",
+     shorttitle="MacroAcademic v4.2.0", overlay=false, max_labels_count=500, max_lines_count=500)
 
 // =====================
 // 0) HÀM PHỤ TRỢ
@@ -58,7 +58,7 @@ show_pane3 = view_mode == "Pane 3 - Risk score & Dashboard"
 show_pane4 = view_mode == "Pane 4 - 3-Layer Risk Analysis"
 
 // =====================
-// 2) NHẬP DỮ LIỆU - ĐÃ BỔ SUNG VN02Y
+// 2) NHẬP DỮ LIỆU
 // =====================
 policy_rate     = request.security("VNINTR", timeframe.period, close)
 bond_2y         = request.security("VN02Y",  timeframe.period, close)
@@ -67,7 +67,7 @@ us_10y          = request.security("US10Y",  timeframe.period, close)
 interbank_rate  = request.security("VNINBR", timeframe.period, close)
 
 // =====================
-// 3) SPREADS - CẬP NHẬT HỌC THUẬT VỚI VN02Y
+// 3) SPREADS
 // =====================
 liquidity_stress        = interbank_rate - policy_rate
 yield_curve_standard    = bond_10y - bond_2y
@@ -101,7 +101,7 @@ spread_z  = f_zscore(long_short_spread, len_stats)
 use_dynamic = threshold_mode == "Dynamic (z-score)"
 
 // =====================
-// 5) TÍN HIỆU 4 TRỤ - CẬP NHẬT CHO YIELD CURVE CHUẨN
+// 5) TÍN HIỆU 4 TRỤ
 // =====================
 bool stress_high    = false
 bool stress_low     = false
@@ -132,7 +132,7 @@ else
     spread_warning := long_short_spread < spread_threshold
 
 // =====================
-// 6) PHÂN TÁCH 3 LỚP RỦI RO - CẬP NHẬT VỚI DỮ LIỆU CHUẨN
+// 6) PHÂN TÁCH 3 LỚP RỦI RO
 // =====================
 show_risk_layers = input.bool(true, "🔽 Hien thi phan tich 3 lop rui ro")
 
@@ -161,7 +161,7 @@ layer3_max = layer3_weight_intl + layer3_weight_fx
 layer3_pct = layer3_max > 0 ? (layer3_score / layer3_max) * 100 : 0.0
 
 // =====================
-// 7) RISK SCORE TỔNG HỢP (Legacy)
+// 7) RISK SCORE TỔNG HỢP
 // =====================
 w_stress = input.int(2, "Trong so Cang thanh khoan")
 w_curve  = input.int(2, "Trong so Yield curve (10Y-2Y)")
@@ -194,7 +194,7 @@ color risk_bg   = color.new(risk_base, 92)
 color risk_fill = color.new(risk_base, 85)
 
 // =====================
-// 8) PANE 1 – LÃI SUẤT & CHÍNH SÁCH - BỔ SUNG VN02Y (ĐÃ SỬA LỖI)
+// 8) PANE 1 – LÃI SUẤT & CHÍNH SÁCH
 // =====================
 show_pane1_labels = input.bool(true, "Pane 1: Show line labels (last bar)")
 
@@ -224,7 +224,7 @@ if barstate.islast
         p1_l5 := label.new(bar_index, us_10y,         "US10Y",        style=label.style_label_left, textcolor=color.white, color=color.new(color.blue,   30))
 
 // =====================
-// 9) PANE 2 – SPREADS / Z-SCORE - CẬP NHẬT HIỂN THỊ
+// 9) PANE 2 – SPREADS / Z-SCORE
 // =====================
 pane2_view = input.string("Spreads", "Pane 2: Hien thi", options=["Spreads","Z-scores"])
 show_pane2_events = input.bool(true, "Pane 2: Event markers (edge)")
@@ -309,175 +309,328 @@ plotshape(sc_last and fx_pressure,       title="SC_FX_LAST",  style=shape.labeld
 plotshape(sc_last and inflation_proxy,   title="SC_INF_LAST", style=shape.labeldown, location=location.top, color=color.yellow, text="INF", textcolor=color.black, size=size.small)
 
 // =====================
-// 11) PANE 3 – RISK SCORE & DASHBOARD
+// 11) PANE 3 – RISK SCORE & DASHBOARD (CHỈ HIỂN THỊ KHI CHỌN PANE 3)
 // =====================
 p3_risk = show_pane3 ? risk_pct : na
 plot(p3_risk, title="Risk % (0-100)", color=color.new(color.white, 0), linewidth=2, style=plot.style_stepline)
 plot(p3_risk, title="Risk fill", style=plot.style_area, color=show_pane3 ? risk_fill : na)
 bgcolor(show_pane3 ? risk_bg : na, title="Risk background")
 
-tbl_border = color.new(color.white, 20)
-tbl_bg1    = color.new(color.black, 10)
-tbl_bg2    = color.new(color.black, 25)
-hdr_bg     = color.new(color.white, 5)
-row_bg     = color.new(color.black, 20)
+// Tạo biến table cho Pane 3
+var table risk_table = na
+var table dashboard = na
 
-var risk_table = table.new(position.top_right, 2, 7, bgcolor=tbl_bg2, border_width=2, border_color=tbl_border)
-var dashboard  = table.new(position.bottom_right, 3, 7, bgcolor=tbl_bg1, border_width=2, border_color=tbl_border)
+// Cập nhật bảng CHỈ KHI ở Pane 3
+if barstate.islast
+    // Xóa bảng cũ nếu đang không ở Pane 3
+    if not show_pane3
+        if not na(risk_table)
+            table.delete(risk_table)
+            risk_table := na
+        if not na(dashboard)
+            table.delete(dashboard)
+            dashboard := na
+    // Tạo bảng mới nếu ở Pane 3
+    else if show_pane3
+        // Xóa bảng cũ trước (nếu có)
+        if not na(risk_table)
+            table.delete(risk_table)
+        if not na(dashboard)
+            table.delete(dashboard)
+        
+        // Tạo bảng mới với vị trí và kích thước
+        risk_table := table.new(position.top_right, 2, 7, 
+             bgcolor=color.new(color.black, 25), 
+             border_width=2, 
+             border_color=color.new(color.white, 20))
+        
+        dashboard := table.new(position.bottom_right, 3, 7,
+             bgcolor=color.new(color.black, 10),
+             border_width=2,
+             border_color=color.new(color.white, 20))
+        
+        show_z_in_dash = input.bool(true, "Pane 3: Dashboard show z-score (when Dynamic)")
+        
+        // ===== Risk table =====
+        table.merge_cells(risk_table, 0, 0, 1, 0)
+        table.cell(risk_table, 0, 0, " HE THONG CANH BAO VI MO CHUAN ",
+             bgcolor=color.new(color.blue, 0), text_color=color.white, text_size=size.normal)
+        
+        table.merge_cells(risk_table, 0, 1, 1, 1)
+        table.cell(risk_table, 0, 1, "✓ Dung duong cong loi suat chuan (10Y-2Y)",
+             bgcolor=color.new(#4CAF50, 30), text_color=color.white, text_size=size.tiny)
 
-show_z_in_dash = input.bool(true, "Pane 3: Dashboard show z-score (when Dynamic)")
+        table.cell(risk_table, 0, 2, " Cang TK ",  bgcolor=stress_high ? color.red : color.green, text_color=color.white, text_size=size.small)
+        table.cell(risk_table, 0, 3, " Yield curve ", bgcolor=curve_inversion ? color.red : color.green, text_color=color.white, text_size=size.small)
+        table.cell(risk_table, 0, 4, " Intl diff ", bgcolor=intl_warning ? color.red : color.green, text_color=color.white, text_size=size.small)
+        table.cell(risk_table, 0, 5, " Long-short ", bgcolor=spread_warning ? color.red : color.green, text_color=color.white, text_size=size.small)
 
-if barstate.islast and show_pane3
-    table.merge_cells(risk_table, 0, 0, 1, 0)
-    table.cell(risk_table, 0, 0, " HE THONG CANH BAO VI MO CHUAN ",
-         bgcolor=color.new(color.blue, 0), text_color=color.white, text_size=size.normal)
-    
-    table.merge_cells(risk_table, 0, 1, 1, 1)
-    table.cell(risk_table, 0, 1, "✓ Dung duong cong loi suat chuan (10Y-2Y)",
-         bgcolor=color.new(#4CAF50, 30), text_color=color.white, text_size=size.tiny)
+        table.cell(risk_table, 1, 2, stress_high ? " CAO " : " ON ", bgcolor=stress_high ? color.red : color.green, text_color=color.white, text_size=size.small)
+        table.cell(risk_table, 1, 3, curve_inversion ? " DAO " : " ON ", bgcolor=curve_inversion ? color.red : color.green, text_color=color.white, text_size=size.small)
+        table.cell(risk_table, 1, 4, intl_warning ? " THAP " : " ON ", bgcolor=intl_warning ? color.red : color.green, text_color=color.white, text_size=size.small)
+        table.cell(risk_table, 1, 5, spread_warning ? " THAP " : " ON ", bgcolor=spread_warning ? color.red : color.green, text_color=color.white, text_size=size.small)
 
-    table.cell(risk_table, 0, 2, " Cang TK ",  bgcolor=stress_high ? color.red : color.green, text_color=color.white, text_size=size.small)
-    table.cell(risk_table, 0, 3, " Yield curve ", bgcolor=curve_inversion ? color.red : color.green, text_color=color.white, text_size=size.small)
-    table.cell(risk_table, 0, 4, " Intl diff ", bgcolor=intl_warning ? color.red : color.green, text_color=color.white, text_size=size.small)
-    table.cell(risk_table, 0, 5, " Long-short ", bgcolor=spread_warning ? color.red : color.green, text_color=color.white, text_size=size.small)
+        // ===== Dashboard =====
+        table.merge_cells(dashboard, 0, 0, 2, 0)
+        table.cell(dashboard, 0, 0, " DASHBOARD VI MO CHUAN ",
+             bgcolor=color.new(color.blue, 0), text_color=color.white, text_size=size.normal)
 
-    table.cell(risk_table, 1, 2, stress_high ? " CAO " : " ON ", bgcolor=stress_high ? color.red : color.green, text_color=color.white, text_size=size.small)
-    table.cell(risk_table, 1, 3, curve_inversion ? " DAO " : " ON ", bgcolor=curve_inversion ? color.red : color.green, text_color=color.white, text_size=size.small)
-    table.cell(risk_table, 1, 4, intl_warning ? " THAP " : " ON ", bgcolor=intl_warning ? color.red : color.green, text_color=color.white, text_size=size.small)
-    table.cell(risk_table, 1, 5, spread_warning ? " THAP " : " ON ", bgcolor=spread_warning ? color.red : color.green, text_color=color.white, text_size=size.small)
+        table.cell(dashboard, 0, 1, " Chi bao ", bgcolor=color.new(color.white, 5), text_color=color.black, text_size=size.small)
+        table.cell(dashboard, 1, 1, " Gia tri ", bgcolor=color.new(color.white, 5), text_color=color.black, text_size=size.small)
+        table.cell(dashboard, 2, 1, " Trang thai ", bgcolor=color.new(color.white, 5), text_color=color.black, text_size=size.small)
 
-    table.merge_cells(dashboard, 0, 0, 2, 0)
-    table.cell(dashboard, 0, 0, " DASHBOARD VI MO CHUAN ",
-         bgcolor=color.new(color.blue, 0), text_color=color.white, text_size=size.normal)
+        st1 = stress_high ? "CANG THANG" : "ON"
+        st2 = curve_inversion ? "DAO NGUOC" : "ON"
+        st3 = intl_warning ? "AP LUC FX" : "AN TOAN"
+        st4 = spread_warning ? "THAP" : "CAO"
 
-    table.cell(dashboard, 0, 1, " Chi bao ", bgcolor=hdr_bg, text_color=color.black, text_size=size.small)
-    table.cell(dashboard, 1, 1, " Gia tri ", bgcolor=hdr_bg, text_color=color.black, text_size=size.small)
-    table.cell(dashboard, 2, 1, " Trang thai ", bgcolor=hdr_bg, text_color=color.black, text_size=size.small)
+        v1 = use_dynamic and show_z_in_dash ? stress_z : liquidity_stress
+        v2 = use_dynamic and show_z_in_dash ? curve_z : yield_curve_standard
+        v3 = use_dynamic and show_z_in_dash ? intl_z : intl_yield_diff
+        v4 = use_dynamic and show_z_in_dash ? spread_z : long_short_spread
 
-    st1 = stress_high ? "CANG THANG" : "ON"
-    st2 = curve_inversion ? "DAO NGUOC" : "ON"
-    st3 = intl_warning ? "AP LUC FX" : "AN TOAN"
-    st4 = spread_warning ? "THAP" : "CAO"
+        table.cell(dashboard, 0, 2, " Liquidity stress\n(IB-Policy) ", bgcolor=color.new(color.black, 20), text_color=color.white, text_size=size.small)
+        table.cell(dashboard, 1, 2, " " + str.tostring(v1, "#.##") + " ", bgcolor=color.new(color.black, 20), text_color=color.white, text_size=size.small)
+        table.cell(dashboard, 2, 2, " " + st1 + " ", bgcolor=f_statusColor(st1), text_color=color.white, text_size=size.small)
 
-    v1 = use_dynamic and show_z_in_dash ? stress_z : liquidity_stress
-    v2 = use_dynamic and show_z_in_dash ? curve_z : yield_curve_standard
-    v3 = use_dynamic and show_z_in_dash ? intl_z : intl_yield_diff
-    v4 = use_dynamic and show_z_in_dash ? spread_z : long_short_spread
+        table.cell(dashboard, 0, 3, " Yield curve\n(10Y-2Y) ", bgcolor=color.new(color.black, 20), text_color=color.white, text_size=size.small)
+        table.cell(dashboard, 1, 3, " " + str.tostring(v2, "#.##") + " ", bgcolor=color.new(color.black, 20), text_color=color.white, text_size=size.small)
+        table.cell(dashboard, 2, 3, " " + st2 + " ", bgcolor=f_statusColor(st2), text_color=color.white, text_size=size.small)
 
-    table.cell(dashboard, 0, 2, " Liquidity stress\n(IB-Policy) ", bgcolor=row_bg, text_color=color.white, text_size=size.small)
-    table.cell(dashboard, 1, 2, " " + str.tostring(v1, "#.##") + " ", bgcolor=row_bg, text_color=color.white, text_size=size.small)
-    table.cell(dashboard, 2, 2, " " + st1 + " ", bgcolor=f_statusColor(st1), text_color=color.white, text_size=size.small)
+        table.cell(dashboard, 0, 4, " Intl yield diff\n(VN10Y-US10Y) ", bgcolor=color.new(color.black, 20), text_color=color.white, text_size=size.small)
+        table.cell(dashboard, 1, 4, " " + str.tostring(v3, "#.##") + " ", bgcolor=color.new(color.black, 20), text_color=color.white, text_size=size.small)
+        table.cell(dashboard, 2, 4, " " + st3 + " ", bgcolor=f_statusColor(st3), text_color=color.white, text_size=size.small)
 
-    table.cell(dashboard, 0, 3, " Yield curve\n(10Y-2Y) ", bgcolor=row_bg, text_color=color.white, text_size=size.small)
-    table.cell(dashboard, 1, 3, " " + str.tostring(v2, "#.##") + " ", bgcolor=row_bg, text_color=color.white, text_size=size.small)
-    table.cell(dashboard, 2, 3, " " + st2 + " ", bgcolor=f_statusColor(st2), text_color=color.white, text_size=size.small)
+        table.cell(dashboard, 0, 5, " Long-short spread\n(10Y-Policy) ", bgcolor=color.new(color.black, 20), text_color=color.white, text_size=size.small)
+        table.cell(dashboard, 1, 5, " " + str.tostring(v4, "#.##") + " ", bgcolor=color.new(color.black, 20), text_color=color.white, text_size=size.small)
+        table.cell(dashboard, 2, 5, " " + st4 + " ", bgcolor=f_statusColor(st4), text_color=color.white, text_size=size.small)
 
-    table.cell(dashboard, 0, 4, " Intl yield diff\n(VN10Y-US10Y) ", bgcolor=row_bg, text_color=color.white, text_size=size.small)
-    table.cell(dashboard, 1, 4, " " + str.tostring(v3, "#.##") + " ", bgcolor=row_bg, text_color=color.white, text_size=size.small)
-    table.cell(dashboard, 2, 4, " " + st3 + " ", bgcolor=f_statusColor(st3), text_color=color.white, text_size=size.small)
+        scen = "BINH THUONG"
+        scol = color.new(color.green, 0)
+        if liquidity_crisis
+            scen := "KHUNG HOANG THANH KHOAN"
+            scol := color.new(color.red, 0)
+        else if recession_warning
+            scen := "CANH BAO SUY THOAI (Chuan)"
+            scol := color.new(color.orange, 0)
+        else if fx_pressure
+            scen := "AP LUC TY GIA"
+            scol := color.new(color.purple, 0)
+        else if inflation_proxy
+            scen := "PROXY LAM PHAT CAO"
+            scol := color.new(color.yellow, 0)
 
-    table.cell(dashboard, 0, 5, " Long-short spread\n(10Y-Policy) ", bgcolor=row_bg, text_color=color.white, text_size=size.small)
-    table.cell(dashboard, 1, 5, " " + str.tostring(v4, "#.##") + " ", bgcolor=row_bg, text_color=color.white, text_size=size.small)
-    table.cell(dashboard, 2, 5, " " + st4 + " ", bgcolor=f_statusColor(st4), text_color=color.white, text_size=size.small)
-
-    scen = "BINH THUONG"
-    scol = color.new(color.green, 0)
-    if liquidity_crisis
-        scen := "KHUNG HOANG THANH KHOAN"
-        scol := color.new(color.red, 0)
-    else if recession_warning
-        scen := "CANH BAO SUY THOAI (Chuan)"
-        scol := color.new(color.orange, 0)
-    else if fx_pressure
-        scen := "AP LUC TY GIA"
-        scol := color.new(color.purple, 0)
-    else if inflation_proxy
-        scen := "PROXY LAM PHAT CAO"
-        scol := color.new(color.yellow, 0)
-
-    table.cell(dashboard, 0, 6, " KICH BAN: ", bgcolor=hdr_bg, text_color=color.black, text_size=size.small)
-    table.merge_cells(dashboard, 1, 6, 2, 6)
-    table.cell(dashboard, 1, 6, " " + scen + " ", bgcolor=scol, text_color=f_textColorForBg(scol), text_size=size.small)
-
-// =====================
-// 12) PANE 4 – 3-LAYER RISK ANALYSIS
-// =====================
-plot(show_pane4 ? layer1_pct : na, title="Layer 1: Rui ro thanh khoan", color=color.new(#FF6B6B, 0), linewidth=2)
-plot(show_pane4 ? layer2_pct : na, title="Layer 2: Rui ro chu ky (10Y-2Y)", color=color.new(#FFA726, 0), linewidth=2)
-plot(show_pane4 ? layer3_pct : na, title="Layer 3: Rui ro ngoai vi", color=color.new(#42A5F5, 0), linewidth=2)
-
-bgcolor(show_pane4 and layer1_pct >= 60 ? color.new(#FF6B6B, 90) : na, title="Layer1 High")
-bgcolor(show_pane4 and layer2_pct >= 60 ? color.new(#FFA726, 90) : na, title="Layer2 High")
-bgcolor(show_pane4 and layer3_pct >= 60 ? color.new(#42A5F5, 90) : na, title="Layer3 High")
-
-var layer_table = table.new(position.top_right, 4, 6, bgcolor=color.new(#1A237E, 95), border_width=2, border_color=color.white)
-
-if barstate.islast and (show_pane4 or show_risk_layers)
-    table.merge_cells(layer_table, 0, 0, 3, 0)
-    table.cell(layer_table, 0, 0, " PHAN TICH 3 LOP RUI RO (CHUAN) ", 
-         bgcolor=color.new(#0D47A1, 0), text_color=color.white, text_size=size.normal)
-    
-    table.cell(layer_table, 0, 1, " LOP RUI RO ", bgcolor=color.new(#3949AB, 0), text_color=color.white, text_size=size.small)
-    table.cell(layer_table, 1, 1, " DIEM ", bgcolor=color.new(#3949AB, 0), text_color=color.white, text_size=size.small)
-    table.cell(layer_table, 2, 1, " % ", bgcolor=color.new(#3949AB, 0), text_color=color.white, text_size=size.small)
-    table.cell(layer_table, 3, 1, " TRANG THAI ", bgcolor=color.new(#3949AB, 0), text_color=color.white, text_size=size.small)
-    
-    layer1_status = layer1_pct >= 80 ? "NGUY HIEM" : layer1_pct >= 60 ? "CAO" : layer1_pct >= 40 ? "TRUNG BINH" : layer1_pct >= 20 ? "THAP" : "RAT THAP"
-    layer1_bg = f_layerColor(layer1_pct)
-    
-    table.cell(layer_table, 0, 2, " 🟥 Thanh khoan ngan han ", 
-         bgcolor=color.new(#FF5252, 20), text_color=color.white, text_size=size.small)
-    table.cell(layer_table, 1, 2, str.tostring(layer1_score, "#.0") + "/" + str.tostring(layer1_max), 
-         bgcolor=color.new(#FF5252, 20), text_color=color.white, text_size=size.small)
-    table.cell(layer_table, 2, 2, str.tostring(layer1_pct, "#.0") + "%", 
-         bgcolor=layer1_bg, text_color=color.white, text_size=size.small)
-    table.cell(layer_table, 3, 2, " " + layer1_status + " ", 
-         bgcolor=layer1_bg, text_color=color.white, text_size=size.small)
-    
-    layer2_status = layer2_pct >= 80 ? "NONG (DAO)" : layer2_pct >= 60 ? "AM" : layer2_pct >= 40 ? "TRUNG TINH" : layer2_pct >= 20 ? "MAT" : "LANH"
-    layer2_bg = f_layerColor(layer2_pct)
-    
-    table.cell(layer_table, 0, 3, " 🟨 Chu ky vi mo (10Y-2Y) ", 
-         bgcolor=color.new(#FF9800, 20), text_color=color.white, text_size=size.small)
-    table.cell(layer_table, 1, 3, str.tostring(layer2_score, "#.0") + "/" + str.tostring(layer2_max), 
-         bgcolor=color.new(#FF9800, 20), text_color=color.white, text_size=size.small)
-    table.cell(layer_table, 2, 3, str.tostring(layer2_pct, "#.0") + "%", 
-         bgcolor=layer2_bg, text_color=color.white, text_size=size.small)
-    table.cell(layer_table, 3, 3, " " + layer2_status + " ", 
-         bgcolor=layer2_bg, text_color=color.white, text_size=size.small)
-    
-    layer3_status = layer3_pct >= 80 ? "MANH" : layer3_pct >= 60 ? "VUA" : layer3_pct >= 40 ? "TRUNG BINH" : layer3_pct >= 20 ? "YEU" : "RAT YEU"
-    layer3_bg = f_layerColor(layer3_pct)
-    
-    table.cell(layer_table, 0, 4, " 🟦 Ngoai vi & FX ", 
-         bgcolor=color.new(#2196F3, 20), text_color=color.white, text_size=size.small)
-    table.cell(layer_table, 1, 4, str.tostring(layer3_score, "#.0") + "/" + str.tostring(layer3_max), 
-         bgcolor=color.new(#2196F3, 20), text_color=color.white, text_size=size.small)
-    table.cell(layer_table, 2, 4, str.tostring(layer3_pct, "#.0") + "%", 
-         bgcolor=layer3_bg, text_color=color.white, text_size=size.small)
-    table.cell(layer_table, 3, 4, " " + layer3_status + " ", 
-         bgcolor=layer3_bg, text_color=color.white, text_size=size.small)
-    
-    table.merge_cells(layer_table, 0, 5, 3, 5)
-    total_judgement = ""
-    if layer2_pct >= 70 and curve_inversion
-        total_judgement := "⚠️ CANH BAO SUY THOAI (Chuan)"
-    else if layer1_pct >= 60 and layer2_pct >= 60
-        total_judgement := "⚠️ CANG THANG TOAN DIEN"
-    else if layer1_pct >= 60
-        total_judgement := "📉 RUI RO THANH KHOAN CAO"
-    else if layer2_pct >= 60
-        total_judgement := "📊 CHU KY XAU (10Y-2Y)"
-    else if layer3_pct >= 60
-        total_judgement := "🌍 AP LUC NGOAI VI"
-    else
-        total_judgement := "✅ ON DINH"
-    
-    table.cell(layer_table, 0, 5, " " + total_judgement + " ", 
-         bgcolor=color.new(#4CAF50, 0), text_color=color.white, text_size=size.small)
+        table.cell(dashboard, 0, 6, " KICH BAN: ", bgcolor=color.new(color.white, 5), text_color=color.black, text_size=size.small)
+        table.merge_cells(dashboard, 1, 6, 2, 6)
+        table.cell(dashboard, 1, 6, " " + scen + " ", bgcolor=scol, text_color=f_textColorForBg(scol), text_size=size.small)
 
 // =====================
-// 13) ALERT
+// 12) PANE 4 – 3-LAYER RISK ANALYSIS (CHỈ HIỂN THỊ KHI CHỌN PANE 4)
+// =====================
+
+// --- VẼ ĐỒ THỊ 3 LỚP ---
+plot(show_pane4 ? layer1_pct : na, title="🟥 Lớp 1: Rủi ro Thanh khoản", color=color.new(#FF6B6B, 0), linewidth=3)
+plot(show_pane4 ? layer2_pct : na, title="🟨 Lớp 2: Rủi ro Chu kỳ vĩ mô", color=color.new(#FFA726, 0), linewidth=3)
+plot(show_pane4 ? layer3_pct : na, title="🟦 Lớp 3: Rủi ro Ngoại vi", color=color.new(#42A5F5, 0), linewidth=3)
+
+// --- THÊM ĐƯỜNG THAM CHIẾU VÀ CHÚ THÍCH ---
+hline(80, "Rất Cao (80%)", color=color.new(color.red, 50), linestyle=hline.style_dotted, editable=false)
+hline(60, "Cao (60%)", color=color.new(color.orange, 50), linestyle=hline.style_dotted, editable=false)
+hline(40, "Trung bình (40%)", color=color.new(color.yellow, 50), linestyle=hline.style_dotted, editable=false)
+hline(20, "Thấp (20%)", color=color.new(color.green, 50), linestyle=hline.style_dotted, editable=false)
+
+// Tô màu nền vùng rủi ro
+bgcolor(show_pane4 and layer1_pct >= 60 ? color.new(#FF6B6B, 85) : na, title="Vùng rủi ro Lớp 1 Cao")
+bgcolor(show_pane4 and layer2_pct >= 60 ? color.new(#FFA726, 85) : na, title="Vùng rủi ro Lớp 2 Cao")
+bgcolor(show_pane4 and layer3_pct >= 60 ? color.new(#42A5F5, 85) : na, title="Vùng rủi ro Lớp 3 Cao")
+
+// Tạo biến table cho Pane 4
+var table guide_table = na
+var table layer_table = na
+
+// Cập nhật bảng CHỈ KHI ở Pane 4
+if barstate.islast
+    // Xóa bảng cũ nếu đang không ở Pane 4
+    if not show_pane4
+        if not na(guide_table)
+            table.delete(guide_table)
+            guide_table := na
+        if not na(layer_table)
+            table.delete(layer_table)
+            layer_table := na
+    // Tạo bảng mới nếu ở Pane 4
+    else if show_pane4
+        // Xóa bảng cũ trước (nếu có)
+        if not na(guide_table)
+            table.delete(guide_table)
+        if not na(layer_table)
+            table.delete(layer_table)
+        
+        // Tạo bảng mới
+        guide_table := table.new(position.middle_right, 3, 12, 
+             bgcolor=color.new(#2E3B4E, 95), 
+             border_width=1, 
+             border_color=color.new(#FFFFFF, 30))
+        
+        layer_table := table.new(position.top_right, 4, 8,
+             bgcolor=color.new(#1A237E, 95),
+             border_width=2,
+             border_color=color.white)
+        
+        // ===== BẢNG HƯỚNG DẪN =====
+        table.merge_cells(guide_table, 0, 0, 2, 0)
+        table.cell(guide_table, 0, 0, " 📊 HƯỚNG DẪN ĐỌC 3 LỚP RỦI RO ", 
+             bgcolor=color.new(#1E88E5, 0), text_color=color.white, text_size=size.normal)
+        
+        table.merge_cells(guide_table, 0, 1, 2, 1)
+        table.cell(guide_table, 0, 1, "Hệ thống tách rủi ro thành 3 lớp độc lập để xác định NGUỒN GỐC rủi ro.", 
+             bgcolor=color.new(#455A64, 70), text_color=color.white, text_size=size.tiny)
+        
+        table.cell(guide_table, 0, 2, " 🟥 LỚP 1:", bgcolor=color.new(#FF5252, 30), text_color=color.white, text_size=size.small)
+        table.merge_cells(guide_table, 1, 2, 2, 2)
+        table.cell(guide_table, 1, 2, "RỦI RO THANH KHOẢN NGẮN HẠN\n• Tần suất: Vài ngày → vài tuần\n• Gồm: Căng thẳng IB-Policy", 
+             bgcolor=color.new(#FF5252, 10), text_color=color.white, text_size=size.tiny)
+        
+        table.cell(guide_table, 0, 3, " 🟨 LỚP 2:", bgcolor=color.new(#FF9800, 30), text_color=color.white, text_size=size.small)
+        table.merge_cells(guide_table, 1, 3, 2, 3)
+        table.cell(guide_table, 1, 3, "RỦI RO CHU KỲ VĨ MÔ\n• Tần suất: Vài tháng → vài quý\n• Gồm: Yield curve (10Y-2Y) + Long-Short Spread", 
+             bgcolor=color.new(#FF9800, 10), text_color=color.white, text_size=size.tiny)
+        
+        table.cell(guide_table, 0, 4, " 🟦 LỚP 3:", bgcolor=color.new(#2196F3, 30), text_color=color.white, text_size=size.small)
+        table.merge_cells(guide_table, 1, 4, 2, 4)
+        table.cell(guide_table, 1, 4, "RỦI RO NGOẠI VI\n• Tần suất: Vài tuần → vài tháng\n• Gồm: Chênh lệch QT + Áp lực FX", 
+             bgcolor=color.new(#2196F3, 10), text_color=color.white, text_size=size.tiny)
+        
+        table.merge_cells(guide_table, 0, 5, 2, 5)
+        table.cell(guide_table, 0, 5, " 🎯 THANG ĐIỂM ĐÁNH GIÁ (%)", 
+             bgcolor=color.new(#546E7A, 50), text_color=color.white, text_size=size.small)
+        
+        table.cell(guide_table, 0, 6, "0-20%", bgcolor=color.new(#4CAF50, 70), text_color=color.white, text_size=size.small)
+        table.merge_cells(guide_table, 1, 6, 2, 6)
+        table.cell(guide_table, 1, 6, "Rất thấp / Ổn định", 
+             bgcolor=color.new(#4CAF50, 20), text_color=color.white, text_size=size.tiny)
+        
+        table.cell(guide_table, 0, 7, "20-40%", bgcolor=color.new(#8BC34A, 70), text_color=color.white, text_size=size.small)
+        table.merge_cells(guide_table, 1, 7, 2, 7)
+        table.cell(guide_table, 1, 7, "Thấp / Cần theo dõi", 
+             bgcolor=color.new(#8BC34A, 20), text_color=color.white, text_size=size.tiny)
+        
+        table.cell(guide_table, 0, 8, "40-60%", bgcolor=color.new(#FFC107, 70), text_color=color.black, text_size=size.small)
+        table.merge_cells(guide_table, 1, 8, 2, 8)
+        table.cell(guide_table, 1, 8, "Trung bình / Cảnh giác", 
+             bgcolor=color.new(#FFC107, 20), text_color=color.white, text_size=size.tiny)
+        
+        table.cell(guide_table, 0, 9, "60-80%", bgcolor=color.new(#FF9800, 70), text_color=color.white, text_size=size.small)
+        table.merge_cells(guide_table, 1, 9, 2, 9)
+        table.cell(guide_table, 1, 9, "Cao / Cảnh báo", 
+             bgcolor=color.new(#FF9800, 20), text_color=color.white, text_size=size.tiny)
+        
+        table.cell(guide_table, 0, 10, "80-100%", bgcolor=color.new(#F44336, 70), text_color=color.white, text_size=size.small)
+        table.merge_cells(guide_table, 1, 10, 2, 10)
+        table.cell(guide_table, 1, 10, "Rất cao / Nguy hiểm", 
+             bgcolor=color.new(#F44336, 20), text_color=color.white, text_size=size.tiny)
+        
+        table.merge_cells(guide_table, 0, 11, 2, 11)
+        application_text = " 💡 ỨNG DỤNG THỰC TẾ:\n"
+        application_text := application_text + "• Lớp 1 cao: Cảnh giác với cổ phiếu ngân hàng, trái phiếu ngắn hạn\n"
+        application_text := application_text + "• Lớp 2 cao: Xem xét giảm tỷ trọng cổ phiếu chu kỳ\n"
+        application_text := application_text + "• Lớp 3 cao: Theo dõi sát tỷ giá và dòng vốn ngoại"
+        
+        table.cell(guide_table, 0, 11, application_text, 
+             bgcolor=color.new(#37474F, 60), text_color=color.white, text_size=size.tiny)
+        
+        // ===== BẢNG KẾT QUẢ PHÂN TÍCH =====
+        table.merge_cells(layer_table, 0, 0, 3, 0)
+        table.cell(layer_table, 0, 0, " 📈 PHÂN TÍCH 3 LỚP RỦI RO - KẾT QUẢ ", 
+             bgcolor=color.new(#0D47A1, 0), text_color=color.white, text_size=size.normal)
+        
+        table.cell(layer_table, 0, 1, " LỚP RỦI RO ", bgcolor=color.new(#3949AB, 0), text_color=color.white, text_size=size.small)
+        table.cell(layer_table, 1, 1, " ĐIỂM ", bgcolor=color.new(#3949AB, 0), text_color=color.white, text_size=size.small)
+        table.cell(layer_table, 2, 1, " TỶ LỆ ", bgcolor=color.new(#3949AB, 0), text_color=color.white, text_size=size.small)
+        table.cell(layer_table, 3, 1, " ĐÁNH GIÁ ", bgcolor=color.new(#3949AB, 0), text_color=color.white, text_size=size.small)
+        
+        layer1_status = layer1_pct >= 80 ? "N.G.HIỂM" : layer1_pct >= 60 ? "CAO" : layer1_pct >= 40 ? "T.BÌNH" : layer1_pct >= 20 ? "THẤP" : "R.THẤP"
+        layer1_bg = f_layerColor(layer1_pct)
+        
+        table.cell(layer_table, 0, 2, " Thanh khoản ", 
+             bgcolor=color.new(#FF5252, 20), text_color=color.white, text_size=size.small)
+        table.cell(layer_table, 1, 2, str.tostring(layer1_score, "#.0") + "/" + str.tostring(layer1_max), 
+             bgcolor=color.new(#FF5252, 20), text_color=color.white, text_size=size.small)
+        table.cell(layer_table, 2, 2, str.tostring(layer1_pct, "#.0") + "%", 
+             bgcolor=layer1_bg, text_color=color.white, text_size=size.small)
+        table.cell(layer_table, 3, 2, " " + layer1_status + " ", 
+             bgcolor=layer1_bg, text_color=color.white, text_size=size.small)
+        
+        layer2_status = layer2_pct >= 80 ? "NÓNG (ĐẢO)" : layer2_pct >= 60 ? "ẤM" : layer2_pct >= 40 ? "TR.TÍNH" : layer2_pct >= 20 ? "MÁT" : "LẠNH"
+        layer2_bg = f_layerColor(layer2_pct)
+        
+        table.cell(layer_table, 0, 3, " Chu kỳ VM ", 
+             bgcolor=color.new(#FF9800, 20), text_color=color.white, text_size=size.small)
+        table.cell(layer_table, 1, 3, str.tostring(layer2_score, "#.0") + "/" + str.tostring(layer2_max), 
+             bgcolor=color.new(#FF9800, 20), text_color=color.white, text_size=size.small)
+        table.cell(layer_table, 2, 3, str.tostring(layer2_pct, "#.0") + "%", 
+             bgcolor=layer2_bg, text_color=color.white, text_size=size.small)
+        table.cell(layer_table, 3, 3, " " + layer2_status + " ", 
+             bgcolor=layer2_bg, text_color=color.white, text_size=size.small)
+        
+        layer3_status = layer3_pct >= 80 ? "MẠNH" : layer3_pct >= 60 ? "VỪA" : layer3_pct >= 40 ? "T.BÌNH" : layer3_pct >= 20 ? "YẾU" : "R.YẾU"
+        layer3_bg = f_layerColor(layer3_pct)
+        
+        table.cell(layer_table, 0, 4, " Ngoại vi ", 
+             bgcolor=color.new(#2196F3, 20), text_color=color.white, text_size=size.small)
+        table.cell(layer_table, 1, 4, str.tostring(layer3_score, "#.0") + "/" + str.tostring(layer3_max), 
+             bgcolor=color.new(#2196F3, 20), text_color=color.white, text_size=size.small)
+        table.cell(layer_table, 2, 4, str.tostring(layer3_pct, "#.0") + "%", 
+             bgcolor=layer3_bg, text_color=color.white, text_size=size.small)
+        table.cell(layer_table, 3, 4, " " + layer3_status + " ", 
+             bgcolor=layer3_bg, text_color=color.white, text_size=size.small)
+        
+        table.merge_cells(layer_table, 0, 5, 3, 5)
+        total_judgement = ""
+        detail_analysis = ""
+        
+        if layer2_pct >= 70 and curve_inversion
+            total_judgement := "⚠️ CẢNH BÁO SUY THOAI MẠNH"
+            detail_analysis := "Đường cong (10Y-2Y) đảo ngược + Điểm chu kỳ rất cao"
+        else if layer1_pct >= 60 and layer2_pct >= 60
+            total_judgement := "⚠️ CĂNG THẲNG TOÀN DIỆN"
+            detail_analysis := "Cả thanh khoản lẫn chu kỳ đều ở mức báo động"
+        else if layer1_pct >= 60
+            total_judgement := "📉 RỦI RO THANH KHOẢN CAO"
+            detail_analysis := "Hệ thống ngân hàng có thể gặp áp lực ngắn hạn"
+        else if layer2_pct >= 60
+            total_judgement := "📊 TRIỂN VỌNG VĨ MÔ XẤU"
+            detail_analysis := "Tín hiệu dài hạn từ yield curve đáng lo ngại"
+        else if layer3_pct >= 60
+            total_judgement := "🌍 ÁP LỰC TỪ BÊN NGOÀI"
+            detail_analysis := "Rủi ro tỷ giá và dòng vốn quốc tế gia tăng"
+        else
+            total_judgement := "✅ MÔI TRƯỜNG ỔN ĐỊNH"
+            detail_analysis := "Không có rủi ro đáng kể ở cả 3 mặt trận"
+        
+        table.cell(layer_table, 0, 5, " " + total_judgement + " ", 
+             bgcolor=color.new(#4CAF50, 0), text_color=color.white, text_size=size.normal)
+        
+        table.merge_cells(layer_table, 0, 6, 3, 6)
+        table.cell(layer_table, 0, 6, " " + detail_analysis + " ", 
+             bgcolor=color.new(#37474F, 70), text_color=color.white, text_size=size.tiny)
+        
+        table.merge_cells(layer_table, 0, 7, 3, 7)
+        action_text = "👉 HÀNH ĐỘNG: "
+        if layer1_pct >= 60
+            action_text := action_text + "Theo dõi sát thanh khoản | "
+        if layer2_pct >= 60
+            action_text := action_text + "Giảm rủi ro vĩ mô | "
+        if layer3_pct >= 60
+            action_text := action_text + "Bảo vệ trước biến động FX"
+        if action_text == "👉 HÀNH ĐỘNG: "
+            action_text := action_text + "Duy trì chiến lược hiện tại"
+        
+        table.cell(layer_table, 0, 7, action_text, 
+             bgcolor=color.new(#1565C0, 70), text_color=color.white, text_size=size.small)
+
+// =====================
+// 13) ALERT (HOẠT ĐỘNG TRÊN TẤT CẢ PANEL)
 // =====================
 risk_alert_level = input.int(4, "Nguong canh bao diem rui ro", minval=1)
 layer1_alert = input.float(60, "Nguong canh bao Lop 1 (%)", minval=0, maxval=100)
