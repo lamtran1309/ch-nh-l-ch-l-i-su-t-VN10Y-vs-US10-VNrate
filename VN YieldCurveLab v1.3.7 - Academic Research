@@ -1,0 +1,670 @@
+//@version=5
+indicator("VN YieldCurveLab v1.3.7 - Academic Research (ASCII Safe)",
+     shorttitle="VN YieldCurveLab",
+     overlay=false, max_labels_count=300, max_lines_count=200, max_bars_back=5000, precision=4)
+
+//======================================================
+// 0) INPUTS
+//======================================================
+panel_view  = input.int(1, "Chon panel (1=Shape, 2=Grid, 3=Stats)", minval=1, maxval=3)
+show_panel1 = panel_view == 1
+show_panel2 = panel_view == 2
+show_panel3 = panel_view == 3
+
+sym_1Y  = input.symbol("TVC:VN01Y", "1Y Yield")
+sym_2Y  = input.symbol("TVC:VN02Y", "2Y Yield")
+sym_3Y  = input.symbol("TVC:VN03Y", "3Y Yield")
+sym_5Y  = input.symbol("TVC:VN05Y", "5Y Yield")
+sym_7Y  = input.symbol("TVC:VN07Y", "7Y Yield")
+sym_10Y = input.symbol("TVC:VN10Y", "10Y Yield")
+
+sym_interbank = input.symbol("VNINBR", "Interbank (VNINBR)")
+sym_policy    = input.symbol("VNINTR", "Policy Rate (VNINTR)")
+
+len_stats   = input.int(120, "So ngay thong ke (len_stats)", minval=30)
+clip_mult   = input.float(2.5, "Clip multiplier (robust z)", minval=1.0, maxval=5.0)
+use_percent = input.bool(true, "Tinh percentile (0-100%) ?")
+len_change  = input.int(60, "So ngay doi chieu Grid (change window)", minval=5)
+
+low_th_pct  = input.float(20.0, "Nguong percentile LOW",  minval=0.0,  maxval=50.0)
+high_th_pct = input.float(80.0, "Nguong percentile HIGH", minval=50.0, maxval=100.0)
+len_deriv   = input.int(5, "So ngay tinh dao ham factor (momentum)", minval=1, maxval=60)
+
+// Labels on chart (only ticker names)
+show_line_labels  = input.bool(true,  "Hien label tren duong (chi ten ticker)")
+label_all_tenors  = input.bool(false, "Label them 1Y/3Y/7Y")
+label_offset_bars = input.int(6, "Label offset bars (ben phai)", minval=1, maxval=50)
+
+tf_req = "D"
+
+//======================================================
+// 1) HELPERS (ASCII safe, no ternary)
+//======================================================
+f_robust_zscore(src, length, clip) =>
+    _mean = ta.sma(src, length)
+    _std  = ta.stdev(src, length)
+    upper = _mean + clip * _std
+    lower = _mean - clip * _std
+    clipped = math.max(lower, math.min(upper, src))
+    c_mean = ta.sma(clipped, length)
+    c_std  = ta.stdev(clipped, length)
+    float out = 0.0
+    if c_std > 0
+        out := (src - c_mean) / c_std
+    out
+
+f_pct_str(v) =>
+    string s = "NA"
+    if not na(v)
+        s := str.tostring(v, "#.0") + "%"
+    s
+
+f_num_str(v, fmt) =>
+    string s = "NA"
+    if not na(v)
+        s := str.tostring(v, fmt)
+    s
+
+f_arrow_ascii(d) =>
+    string a = "-"
+    if not na(d)
+        if d > 0.01
+            a := "UP"
+        else if d < -0.01
+            a := "DN"
+        else
+            a := "-"
+    a
+
+f_bucket_pct(p, low_th, high_th) =>
+    string b = "NA"
+    if not na(p)
+        if p <= low_th
+            b := "LOW"
+        else if p >= high_th
+            b := "HIGH"
+        else
+            b := "MID"
+    b
+
+f_bucket_z(z) =>
+    string b = "NA"
+    if not na(z)
+        if z <= -1.0
+            b := "CHEAP"
+        else if z >= 1.0
+            b := "RICH"
+        else
+            b := "FAIR"
+    b
+
+f_bg_state(tag) =>
+    color out = color.new(color.gray, 85)
+    if tag == "HIGH" or tag == "RICH" or tag == "STRESS CAO" or tag == "YC4" or tag == "INVERTED" or tag == "DISTORTED"
+        out := color.new(color.red, 10)
+    else if tag == "MID" or tag == "FAIR" or tag == "TRUNG TINH" or tag == "YC0" or tag == "FLAT" or tag == "MIXED"
+        out := color.new(color.orange, 15)
+    else if tag == "LOW" or tag == "CHEAP" or tag == "STRESS THAP" or tag == "YC1" or tag == "YC2" or tag == "PURE MOVE"
+        out := color.new(color.lime, 12)
+    else if tag == "YC3"
+        out := color.new(color.fuchsia, 15)
+    out
+
+f_cell(_t, _c, _r, _txt, _bg, _tc, _ha, _sz) =>
+    table.cell(_t, _c, _r, _txt, bgcolor=_bg, text_color=_tc, text_halign=_ha, text_size=_sz)
+
+f_updLabel(_lbl, _x, _y, _txt, _col) =>
+    label __l = _lbl
+    if na(_y)
+        if not na(__l)
+            label.delete(__l)
+            __l := na
+    else
+        if na(__l)
+            __l := label.new(_x, _y, _txt,
+                 xloc=xloc.bar_index, yloc=yloc.price,
+                 style=label.style_label_left,
+                 textcolor=color.white,
+                 color=color.new(_col, 0),
+                 size=size.tiny)
+        else
+            label.set_xy(__l, _x, _y)
+            label.set_text(__l, _txt)
+            label.set_color(__l, color.new(_col, 0))
+            label.set_textcolor(__l, color.white)
+            label.set_style(__l, label.style_label_left)
+            label.set_size(__l, size.tiny)
+    __l
+
+//======================================================
+// 2) DATA
+//======================================================
+y1  = request.security(sym_1Y,  tf_req, close)
+y2  = request.security(sym_2Y,  tf_req, close)
+y3  = request.security(sym_3Y,  tf_req, close)
+y5  = request.security(sym_5Y,  tf_req, close)
+y7  = request.security(sym_7Y,  tf_req, close)
+y10 = request.security(sym_10Y, tf_req, close)
+
+interbank = request.security(sym_interbank, tf_req, close)
+policy    = request.security(sym_policy,    tf_req, close)
+
+//======================================================
+// 3) FACTORS
+//======================================================
+level = (y2 + y5 + y10) / 3.0
+slope = y10 - y2
+curve = 2.0 * y5 - y2 - y10
+
+level_z = f_robust_zscore(level, len_stats, clip_mult)
+slope_z = f_robust_zscore(slope, len_stats, clip_mult)
+curve_z = f_robust_zscore(curve, len_stats, clip_mult)
+
+float level_pct = na
+float slope_pct = na
+float curve_pct = na
+if use_percent
+    level_pct := ta.percentrank(level, len_stats)
+    slope_pct := ta.percentrank(slope, len_stats)
+    curve_pct := ta.percentrank(curve, len_stats)
+
+float level_d = na
+float slope_d = na
+float curve_d = na
+if not na(level[len_deriv])
+    level_d := level - level[len_deriv]
+if not na(slope[len_deriv])
+    slope_d := slope - slope[len_deriv]
+if not na(curve[len_deriv])
+    curve_d := curve - curve[len_deriv]
+
+//======================================================
+// 4) REGIMES + STRESS
+//======================================================
+string level_regime = "MID"
+if not na(level_pct)
+    if level_pct <= low_th_pct
+        level_regime := "LOW"
+    else if level_pct >= high_th_pct
+        level_regime := "HIGH"
+    else
+        level_regime := "MID"
+
+string slope_regime = "FLAT"
+if slope <= -0.2
+    slope_regime := "INVERTED"
+else
+    if not na(slope_pct)
+        if slope_pct <= low_th_pct
+            slope_regime := "STEEP_LOW"
+        else if slope_pct >= high_th_pct
+            slope_regime := "STEEP_HIGH"
+        else
+            slope_regime := "FLAT"
+
+string yc_code  = "YC0"
+string yc_label = "Neutral/Mixed: chua co thong diep manh."
+if level_regime == "HIGH" and (slope_regime == "FLAT" or slope_regime == "INVERTED")
+    yc_code  := "YC4"
+    yc_label := "Tight: level cao + curve phang/dao nguoc."
+else if level_regime == "HIGH" and slope_regime == "STEEP_HIGH"
+    yc_code  := "YC3"
+    yc_label := "Late tightening: level cao + slope doc."
+else if level_regime == "LOW" and slope_regime == "STEEP_HIGH"
+    yc_code  := "YC2"
+    yc_label := "Early easing: level thap + slope doc."
+else if level_regime == "LOW" and (slope_regime == "FLAT" or slope_regime == "STEEP_LOW")
+    yc_code  := "YC1"
+    yc_label := "Easing mature: level thap + curve phang."
+
+float level_comp = 50.0
+if not na(level_pct)
+    level_comp := level_pct
+
+float slope_risk_pct = 50.0
+if slope <= 0.0
+    slope_risk_pct := 100.0
+else
+    if not na(slope_pct)
+        slope_risk_pct := 100.0 - slope_pct
+
+macro_stress = (level_comp + slope_risk_pct) / 2.0
+
+string stress_regime = "TRUNG TINH"
+if macro_stress >= 70
+    stress_regime := "STRESS CAO"
+else if macro_stress <= 40
+    stress_regime := "STRESS THAP"
+
+//======================================================
+// 5) GRID + DISTORTION + TAKEAWAY
+//======================================================
+y1_z  = f_robust_zscore(y1,  len_stats, clip_mult)
+y2_z  = f_robust_zscore(y2,  len_stats, clip_mult)
+y3_z  = f_robust_zscore(y3,  len_stats, clip_mult)
+y5_z  = f_robust_zscore(y5,  len_stats, clip_mult)
+y7_z  = f_robust_zscore(y7,  len_stats, clip_mult)
+y10_z = f_robust_zscore(y10, len_stats, clip_mult)
+
+float y1_pct = na
+float y2_pct = na
+float y3_pct = na
+float y5_pct = na
+float y7_pct = na
+float y10_pct = na
+if use_percent
+    y1_pct  := ta.percentrank(y1,  len_stats)
+    y2_pct  := ta.percentrank(y2,  len_stats)
+    y3_pct  := ta.percentrank(y3,  len_stats)
+    y5_pct  := ta.percentrank(y5,  len_stats)
+    y7_pct  := ta.percentrank(y7,  len_stats)
+    y10_pct := ta.percentrank(y10, len_stats)
+
+float chg1  = na
+float chg2  = na
+float chg3  = na
+float chg5  = na
+float chg7  = na
+float chg10 = na
+if not na(y1[len_change])
+    chg1 := y1 - y1[len_change]
+if not na(y2[len_change])
+    chg2 := y2 - y2[len_change]
+if not na(y3[len_change])
+    chg3 := y3 - y3[len_change]
+if not na(y5[len_change])
+    chg5 := y5 - y5[len_change]
+if not na(y7[len_change])
+    chg7 := y7 - y7[len_change]
+if not na(y10[len_change])
+    chg10 := y10 - y10[len_change]
+
+// Distortion (dispersion of z across tenors)
+mean_z = (y1_z + y2_z + y3_z + y5_z + y7_z + y10_z) / 6.0
+dz1  = y1_z  - mean_z
+dz2  = y2_z  - mean_z
+dz3  = y3_z  - mean_z
+dz5  = y5_z  - mean_z
+dz7  = y7_z  - mean_z
+dz10 = y10_z - mean_z
+var_z = (dz1*dz1 + dz2*dz2 + dz3*dz3 + dz5*dz5 + dz7*dz7 + dz10*dz10) / 6.0
+yc_distortion = math.sqrt(var_z)
+
+string dist_label = "MIXED"
+if yc_distortion < 0.30
+    dist_label := "PURE MOVE"
+else if yc_distortion > 0.70
+    dist_label := "DISTORTED"
+
+// Move focus
+float short_move = na
+float belly_move = na
+float long_move  = na
+if not na(chg1) and not na(chg2)
+    short_move := (math.abs(chg1) + math.abs(chg2)) / 2.0
+if not na(chg3) and not na(chg5)
+    belly_move := (math.abs(chg3) + math.abs(chg5)) / 2.0
+if not na(chg7) and not na(chg10)
+    long_move  := (math.abs(chg7) + math.abs(chg10)) / 2.0
+
+string move_focus = "NA"
+if not na(short_move) and not na(belly_move) and not na(long_move)
+    move_focus := "SHORT"
+    if belly_move > short_move and belly_move >= long_move
+        move_focus := "BELLY"
+    else if long_move > short_move and long_move > belly_move
+        move_focus := "LONG"
+
+// Curve shift by slope change
+float slope_chg = na
+if not na(y10[len_change]) and not na(y2[len_change])
+    slope_chg := (y10 - y2) - (y10[len_change] - y2[len_change])
+
+string curve_shift = "STABLE"
+if not na(slope_chg)
+    if slope_chg > 0.10
+        curve_shift := "STEEPENING"
+    else if slope_chg < -0.10
+        curve_shift := "FLATTENING"
+    else
+        curve_shift := "STABLE"
+
+//======================================================
+// 6) PLOTS
+//======================================================
+col2  = color.new(color.blue, 0)
+col5  = color.new(color.green, 0)
+col10 = color.new(color.red, 0)
+col1  = color.new(color.gray, 60)
+col3  = color.new(color.orange, 60)
+col7  = color.new(color.purple, 60)
+colIB = color.new(color.yellow, 0)
+colPR = color.new(color.teal, 0)
+
+plot(y2,  title="2Y",  color=col2,  linewidth=2)
+plot(y5,  title="5Y",  color=col5,  linewidth=2)
+plot(y10, title="10Y", color=col10, linewidth=2)
+plot(y1,  title="1Y",  color=col1)
+plot(y3,  title="3Y",  color=col3)
+plot(y7,  title="7Y",  color=col7)
+plot(interbank, title="VNINBR", color=colIB, linewidth=1)
+plot(policy,    title="VNINTR", color=colPR, linewidth=1)
+
+//======================================================
+// 7) LINE LABELS (ONLY TICKER NAMES)
+//======================================================
+var label lb2  = na
+var label lb5  = na
+var label lb10 = na
+var label lb1  = na
+var label lb3  = na
+var label lb7  = na
+var label lbIB = na
+var label lbPR = na
+
+if barstate.islast and show_line_labels
+    xL = bar_index + label_offset_bars
+
+    lb2  := f_updLabel(lb2,  xL, y2,  "2Y",  col2)
+    lb5  := f_updLabel(lb5,  xL, y5,  "5Y",  col5)
+    lb10 := f_updLabel(lb10, xL, y10, "10Y", col10)
+
+    if label_all_tenors
+        lb1 := f_updLabel(lb1, xL, y1, "1Y", color.new(color.gray, 20))
+        lb3 := f_updLabel(lb3, xL, y3, "3Y", color.new(color.orange, 20))
+        lb7 := f_updLabel(lb7, xL, y7, "7Y", color.new(color.purple, 20))
+    else
+        if not na(lb1)
+            label.delete(lb1)
+            lb1 := na
+        if not na(lb3)
+            label.delete(lb3)
+            lb3 := na
+        if not na(lb7)
+            label.delete(lb7)
+            lb7 := na
+
+    lbIB := f_updLabel(lbIB, xL, interbank, "VNINBR", colIB)
+    lbPR := f_updLabel(lbPR, xL, policy,    "VNINTR", colPR)
+
+//======================================================
+// 8) TABLES (Panels)
+//======================================================
+var table t_shape = na
+var table t_grid  = na
+var table t_stats = na
+
+bg_frame   = color.new(color.black, 0)
+bg_title   = color.new(color.black, 10)
+bg_header  = color.new(color.black, 25)
+bg_row_a   = color.new(color.black, 18)
+bg_row_b   = color.new(color.black, 28)
+tc_main    = color.white
+tc_muted   = color.new(color.white, 20)
+
+if barstate.islast
+    // -------- Panel 1 --------
+    if show_panel1
+        if na(t_shape)
+            t_shape := table.new(position.top_left, 4, 7,
+                 frame_width=2, frame_color=bg_frame,
+                 border_width=1, border_color=color.new(color.white, 80))
+            table.merge_cells(t_shape, 0, 0, 3, 0)
+
+        f_cell(t_shape, 0, 0, "VN YIELD CURVE - SHAPE", bg_title, tc_main, text.align_left, size.small)
+        f_cell(t_shape, 1, 0, "", bg_title, tc_main, text.align_left, size.small)
+        f_cell(t_shape, 2, 0, "", bg_title, tc_main, text.align_left, size.small)
+        f_cell(t_shape, 3, 0, "", bg_title, tc_main, text.align_left, size.small)
+
+        f_cell(t_shape, 0, 1, "FACTOR", bg_header, tc_main, text.align_left,  size.tiny)
+        f_cell(t_shape, 1, 1, "VALUE",  bg_header, tc_main, text.align_right, size.tiny)
+        f_cell(t_shape, 2, 1, "PCTL",   bg_header, tc_main, text.align_right, size.tiny)
+        f_cell(t_shape, 3, 1, "STATE",  bg_header, tc_main, text.align_left,  size.tiny)
+
+        f_cell(t_shape, 0, 2, "LEVEL", bg_row_a, tc_main, text.align_left, size.tiny)
+        f_cell(t_shape, 1, 2, f_num_str(level, "#.2"), bg_row_a, tc_main, text.align_right, size.tiny)
+        f_cell(t_shape, 2, 2, f_pct_str(level_pct), bg_row_a, tc_main, text.align_right, size.tiny)
+        f_cell(t_shape, 3, 2, level_regime, f_bg_state(level_regime), tc_main, text.align_left, size.tiny)
+
+        f_cell(t_shape, 0, 3, "SLOPE(10-2)", bg_row_b, tc_main, text.align_left, size.tiny)
+        f_cell(t_shape, 1, 3, f_num_str(slope, "#.2"), bg_row_b, tc_main, text.align_right, size.tiny)
+        f_cell(t_shape, 2, 3, f_pct_str(slope_pct), bg_row_b, tc_main, text.align_right, size.tiny)
+        f_cell(t_shape, 3, 3, slope_regime, f_bg_state(slope_regime), tc_main, text.align_left, size.tiny)
+
+        f_cell(t_shape, 0, 4, "CURVE(2-5-10)", bg_row_a, tc_main, text.align_left, size.tiny)
+        f_cell(t_shape, 1, 4, f_num_str(curve, "#.2"), bg_row_a, tc_main, text.align_right, size.tiny)
+        f_cell(t_shape, 2, 4, f_pct_str(curve_pct), bg_row_a, tc_main, text.align_right, size.tiny)
+        f_cell(t_shape, 3, 4, "", bg_row_a, tc_muted, text.align_left, size.tiny)
+
+        f_cell(t_shape, 0, 5, "YC REGIME", bg_row_b, tc_main, text.align_left, size.tiny)
+        f_cell(t_shape, 1, 5, yc_code, f_bg_state(yc_code), tc_main, text.align_right, size.tiny)
+        f_cell(t_shape, 2, 5, "", bg_row_b, tc_main, text.align_right, size.tiny)
+        f_cell(t_shape, 3, 5, yc_label, bg_row_b, tc_main, text.align_left, size.tiny)
+
+        f_cell(t_shape, 0, 6, "STRESS / DIST", bg_row_a, tc_main, text.align_left, size.tiny)
+        f_cell(t_shape, 1, 6, f_num_str(macro_stress, "#.0"), f_bg_state(stress_regime), tc_main, text.align_right, size.tiny)
+        f_cell(t_shape, 2, 6, dist_label, f_bg_state(dist_label), tc_main, text.align_right, size.tiny)
+        f_cell(t_shape, 3, 6, stress_regime, bg_row_a, tc_main, text.align_left, size.tiny)
+    else
+        if not na(t_shape)
+            table.delete(t_shape)
+            t_shape := na
+
+    // -------- Panel 2 --------
+    if show_panel2
+        if na(t_grid)
+            t_grid := table.new(position.top_left, 7, 8,
+                 frame_width=2, frame_color=bg_frame,
+                 border_width=1, border_color=color.new(color.white, 80))
+            table.merge_cells(t_grid, 0, 0, 6, 0)
+            table.merge_cells(t_grid, 0, 7, 6, 7)
+
+        title_grid = "TERM STRUCTURE - GRID (change=" + str.tostring(len_change) + "d)"
+        f_cell(t_grid, 0, 0, title_grid, bg_title, tc_main, text.align_left, size.small)
+        for c = 1 to 6
+            f_cell(t_grid, c, 0, "", bg_title, tc_main, text.align_left, size.small)
+
+        f_cell(t_grid, 0, 1, "METRIC", bg_header, tc_main, text.align_left, size.tiny)
+        f_cell(t_grid, 1, 1, "1Y",     bg_header, tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 2, 1, "2Y",     bg_header, tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 3, 1, "3Y",     bg_header, tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 4, 1, "5Y",     bg_header, tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 5, 1, "7Y",     bg_header, tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 6, 1, "10Y",    bg_header, tc_main, text.align_right, size.tiny)
+
+        f_cell(t_grid, 0, 2, "YIELD", bg_row_a, tc_main, text.align_left, size.tiny)
+        f_cell(t_grid, 1, 2, f_num_str(y1,  "#.2"), bg_row_a, tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 2, 2, f_num_str(y2,  "#.2"), bg_row_a, tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 3, 2, f_num_str(y3,  "#.2"), bg_row_a, tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 4, 2, f_num_str(y5,  "#.2"), bg_row_a, tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 5, 2, f_num_str(y7,  "#.2"), bg_row_a, tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 6, 2, f_num_str(y10, "#.2"), bg_row_a, tc_main, text.align_right, size.tiny)
+
+        f_cell(t_grid, 0, 3, "MOVE", bg_row_b, tc_main, text.align_left, size.tiny)
+        f_cell(t_grid, 1, 3, f_num_str(chg1,  "#.2") + " " + f_arrow_ascii(chg1),  bg_row_b, tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 2, 3, f_num_str(chg2,  "#.2") + " " + f_arrow_ascii(chg2),  bg_row_b, tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 3, 3, f_num_str(chg3,  "#.2") + " " + f_arrow_ascii(chg3),  bg_row_b, tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 4, 3, f_num_str(chg5,  "#.2") + " " + f_arrow_ascii(chg5),  bg_row_b, tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 5, 3, f_num_str(chg7,  "#.2") + " " + f_arrow_ascii(chg7),  bg_row_b, tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 6, 3, f_num_str(chg10, "#.2") + " " + f_arrow_ascii(chg10), bg_row_b, tc_main, text.align_right, size.tiny)
+
+        s1  = f_bucket_pct(y1_pct,  low_th_pct, high_th_pct)
+        s2  = f_bucket_pct(y2_pct,  low_th_pct, high_th_pct)
+        s3  = f_bucket_pct(y3_pct,  low_th_pct, high_th_pct)
+        s5  = f_bucket_pct(y5_pct,  low_th_pct, high_th_pct)
+        s7  = f_bucket_pct(y7_pct,  low_th_pct, high_th_pct)
+        s10 = f_bucket_pct(y10_pct, low_th_pct, high_th_pct)
+
+        f_cell(t_grid, 0, 4, "STATE(PCTL)", bg_row_a, tc_main, text.align_left, size.tiny)
+        f_cell(t_grid, 1, 4, s1,  f_bg_state(s1),  tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 2, 4, s2,  f_bg_state(s2),  tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 3, 4, s3,  f_bg_state(s3),  tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 4, 4, s5,  f_bg_state(s5),  tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 5, 4, s7,  f_bg_state(s7),  tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 6, 4, s10, f_bg_state(s10), tc_main, text.align_right, size.tiny)
+
+        v1  = f_bucket_z(y1_z)
+        v2  = f_bucket_z(y2_z)
+        v3  = f_bucket_z(y3_z)
+        v5  = f_bucket_z(y5_z)
+        v7  = f_bucket_z(y7_z)
+        v10 = f_bucket_z(y10_z)
+
+        f_cell(t_grid, 0, 5, "VALUATION(Z)", bg_row_b, tc_main, text.align_left, size.tiny)
+        f_cell(t_grid, 1, 5, v1,  f_bg_state(v1),  tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 2, 5, v2,  f_bg_state(v2),  tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 3, 5, v3,  f_bg_state(v3),  tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 4, 5, v5,  f_bg_state(v5),  tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 5, 5, v7,  f_bg_state(v7),  tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 6, 5, v10, f_bg_state(v10), tc_main, text.align_right, size.tiny)
+
+        string curve_badge = "MID"
+        if curve_shift == "FLATTENING"
+            curve_badge := "HIGH"
+        else if curve_shift == "STEEPENING"
+            curve_badge := "LOW"
+        else
+            curve_badge := "MID"
+
+        f_cell(t_grid, 0, 6, "STRUCTURE", bg_row_a, tc_main, text.align_left, size.tiny)
+        f_cell(t_grid, 1, 6, "SLOPE:"+f_num_str(slope,"#.2"), bg_row_a, tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 2, 6, curve_shift, f_bg_state(curve_badge), tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 3, 6, "DIST:"+f_num_str(yc_distortion,"#.2"), bg_row_a, tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 4, 6, dist_label, f_bg_state(dist_label), tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 5, 6, "FOCUS:"+move_focus, bg_row_a, tc_main, text.align_right, size.tiny)
+        f_cell(t_grid, 6, 6, "", bg_row_a, tc_muted, text.align_right, size.tiny)
+
+        string grid_take = "TAKEAWAY: "
+        if move_focus == "SHORT"
+            grid_take += "Short-end nong. "
+        else if move_focus == "BELLY"
+            grid_take += "Belly dong manh. "
+        else if move_focus == "LONG"
+            grid_take += "Long-end bien dong. "
+        else
+            grid_take += "Chua du du lieu. "
+        grid_take += "Curve=" + curve_shift + ", Dist=" + dist_label + "."
+
+        f_cell(t_grid, 0, 7, grid_take, bg_title, tc_main, text.align_left, size.small)
+        for c = 1 to 6
+            f_cell(t_grid, c, 7, "", bg_title, tc_main, text.align_left, size.small)
+    else
+        if not na(t_grid)
+            table.delete(t_grid)
+            t_grid := na
+
+    // -------- Panel 3 --------
+    if show_panel3
+        if na(t_stats)
+            t_stats := table.new(position.top_right, 5, 9,
+                 frame_width=2, frame_color=bg_frame,
+                 border_width=1, border_color=color.new(color.white, 80))
+            table.merge_cells(t_stats, 0, 0, 4, 0)
+            table.merge_cells(t_stats, 0, 8, 4, 8)
+
+        f_cell(t_stats, 0, 0, "RESEARCH DIAGNOSTICS", bg_title, tc_main, text.align_left, size.small)
+        for c = 1 to 4
+            f_cell(t_stats, c, 0, "", bg_title, tc_main, text.align_left, size.small)
+
+        f_cell(t_stats, 0, 1, "ITEM",    bg_header, tc_main, text.align_left,  size.tiny)
+        f_cell(t_stats, 1, 1, "RAW",     bg_header, tc_main, text.align_right, size.tiny)
+        f_cell(t_stats, 2, 1, "Z",       bg_header, tc_main, text.align_right, size.tiny)
+        f_cell(t_stats, 3, 1, "PCTL",    bg_header, tc_main, text.align_right, size.tiny)
+        f_cell(t_stats, 4, 1, "MEANING", bg_header, tc_main, text.align_left,  size.tiny)
+
+        string m_level = "Chi phi von TRUNG BINH"
+        if level_regime == "HIGH"
+            m_level := "Chi phi von CAO (tight bias)"
+        else if level_regime == "LOW"
+            m_level := "Chi phi von THAP (ease bias)"
+
+        f_cell(t_stats, 0, 2, "LEVEL", bg_row_a, tc_main, text.align_left, size.tiny)
+        f_cell(t_stats, 1, 2, f_num_str(level, "#.2"), bg_row_a, tc_main, text.align_right, size.tiny)
+        f_cell(t_stats, 2, 2, f_num_str(level_z, "#.2"), bg_row_a, tc_main, text.align_right, size.tiny)
+        f_cell(t_stats, 3, 2, f_pct_str(level_pct), bg_row_a, tc_main, text.align_right, size.tiny)
+        f_cell(t_stats, 4, 2, m_level, bg_row_a, tc_main, text.align_left, size.tiny)
+
+        string m_slope = "Ky vong trung lap"
+        if slope_regime == "INVERTED"
+            m_slope := "Inversion risk / stress"
+        else if slope_regime == "STEEP_HIGH"
+            m_slope := "Early-cycle tone"
+        else if slope_regime == "FLAT"
+            m_slope := "Late-cycle tone"
+
+        f_cell(t_stats, 0, 3, "SLOPE(10-2)", bg_row_b, tc_main, text.align_left, size.tiny)
+        f_cell(t_stats, 1, 3, f_num_str(slope, "#.2"), bg_row_b, tc_main, text.align_right, size.tiny)
+        f_cell(t_stats, 2, 3, f_num_str(slope_z, "#.2"), bg_row_b, tc_main, text.align_right, size.tiny)
+        f_cell(t_stats, 3, 3, f_pct_str(slope_pct), bg_row_b, tc_main, text.align_right, size.tiny)
+        f_cell(t_stats, 4, 3, m_slope, bg_row_b, tc_main, text.align_left, size.tiny)
+
+        f_cell(t_stats, 0, 4, "CURVE(2-5-10)", bg_row_a, tc_main, text.align_left, size.tiny)
+        f_cell(t_stats, 1, 4, f_num_str(curve, "#.2"), bg_row_a, tc_main, text.align_right, size.tiny)
+        f_cell(t_stats, 2, 4, f_num_str(curve_z, "#.2"), bg_row_a, tc_main, text.align_right, size.tiny)
+        f_cell(t_stats, 3, 4, f_pct_str(curve_pct), bg_row_a, tc_main, text.align_right, size.tiny)
+        f_cell(t_stats, 4, 4, "Policy transmission / belly", bg_row_a, tc_main, text.align_left, size.tiny)
+
+        string m_mom = "Momentum: "
+        if not na(level_d)
+            if level_d > 0.02
+                m_mom += "LEVEL UP "
+            else if level_d < -0.02
+                m_mom += "LEVEL DN "
+            else
+                m_mom += "LEVEL FLAT "
+        if not na(slope_d)
+            if slope_d > 0.02
+                m_mom += "SLOPE UP "
+            else if slope_d < -0.02
+                m_mom += "SLOPE DN "
+            else
+                m_mom += "SLOPE FLAT "
+
+        f_cell(t_stats, 0, 5, "MOM("+str.tostring(len_deriv)+"d)", bg_row_b, tc_main, text.align_left, size.tiny)
+        f_cell(t_stats, 1, 5, f_num_str(level_d, "#.2"), bg_row_b, tc_main, text.align_right, size.tiny)
+        f_cell(t_stats, 2, 5, f_num_str(slope_d, "#.2"), bg_row_b, tc_main, text.align_right, size.tiny)
+        f_cell(t_stats, 3, 5, f_num_str(curve_d, "#.2"), bg_row_b, tc_main, text.align_right, size.tiny)
+        f_cell(t_stats, 4, 5, m_mom, bg_row_b, tc_main, text.align_left, size.tiny)
+
+        string m_dist = "Mixed"
+        if dist_label == "PURE MOVE"
+            m_dist := "Clean (uniform shift)"
+        else if dist_label == "DISTORTED"
+            m_dist := "Segmented / stress"
+
+        f_cell(t_stats, 0, 6, "DIST", bg_row_a, tc_main, text.align_left, size.tiny)
+        f_cell(t_stats, 1, 6, f_num_str(yc_distortion, "#.2"), f_bg_state(dist_label), tc_main, text.align_right, size.tiny)
+        f_cell(t_stats, 2, 6, dist_label, f_bg_state(dist_label), tc_main, text.align_right, size.tiny)
+        f_cell(t_stats, 3, 6, "", bg_row_a, tc_muted, text.align_right, size.tiny)
+        f_cell(t_stats, 4, 6, m_dist, bg_row_a, tc_main, text.align_left, size.tiny)
+
+        string m_stress = "Neutral"
+        if stress_regime == "STRESS CAO"
+            m_stress := "Risk-off bias"
+        else if stress_regime == "STRESS THAP"
+            m_stress := "Risk-on bias"
+
+        f_cell(t_stats, 0, 7, "STRESS/YC", bg_row_b, tc_main, text.align_left, size.tiny)
+        f_cell(t_stats, 1, 7, f_num_str(macro_stress, "#.0"), f_bg_state(stress_regime), tc_main, text.align_right, size.tiny)
+        f_cell(t_stats, 2, 7, yc_code, f_bg_state(yc_code), tc_main, text.align_right, size.tiny)
+        f_cell(t_stats, 3, 7, slope_regime, f_bg_state(slope_regime), tc_main, text.align_right, size.tiny)
+        f_cell(t_stats, 4, 7, m_stress, bg_row_b, tc_main, text.align_left, size.tiny)
+
+        string key_msg = "KEY: Neutral, doi confirm."
+        if yc_code == "YC4"
+            key_msg := "KEY: Tight, can than risk."
+        else if yc_code == "YC2"
+            key_msg := "KEY: Early easing, ho tro risk."
+        else if yc_code == "YC1"
+            key_msg := "KEY: Easing mature, dong luc giam."
+        else if yc_code == "YC3"
+            key_msg := "KEY: Late tightening, coi chung dinh."
+
+        string key_line = yc_code + " | " + stress_regime + " | " + key_msg + " | Dist=" + dist_label
+        f_cell(t_stats, 0, 8, key_line, bg_title, tc_main, text.align_left, size.small)
+        for c = 1 to 4
+            f_cell(t_stats, c, 8, "", bg_title, tc_main, text.align_left, size.small)
+    else
+        if not na(t_stats)
+            table.delete(t_stats)
+            t_stats := na
