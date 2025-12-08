@@ -1,0 +1,163 @@
+VN YieldCurveLab (Academic Research Mode)
+Version: v1.4.2
+Platform: TradingView – Pine Script v5
+Timeframe khuyến nghị: Daily (D)
+Mục tiêu: Công cụ nghiên cứu vĩ mô–trái phiếu (macro-financial research tool) cho đường cong lợi suất VN theo khung 3 nhân tố (Level–Slope–Curvature), kèm Regime và Stress score, trình bày theo multi-panel UI kiểu Bloomberg.
+1) Academic Disclaimer (Tuyên bố học thuật)
+Đây là công cụ mô tả & chẩn đoán (descriptive/diagnostic), không phải mô hình dự báo hay khuyến nghị đầu tư.
+Không sử dụng lookahead; toàn bộ dữ liệu gọi bằng request.security(... lookahead_off).
+Các ngưỡng phân loại (ví dụ 20/80 percentile) là heuristic có kiểm soát (research heuristic), có thể tinh chỉnh theo dữ liệu/chu kỳ.
+Do giới hạn Pine, mô hình Nelson–Siegel đầy đủ (ước lượng tham số phi tuyến) không được triển khai; thay vào đó dùng xấp xỉ factor chuẩn trong nghiên cứu ứng dụng.
+2) Data & Tickers
+2.1. Yields (6 tenor)
+Mặc định dùng các ticker dạng:
+TVC:VN01Y, TVC:VN02Y, TVC:VN03Y, TVC:VN05Y, TVC:VN07Y, TVC:VN10Y
+Lưu ý: TradingView có thể khác nguồn dữ liệu/ticker theo region. Bạn có thể thay bằng ticker khác trong phần Inputs.
+2.2. Short rates
+Interbank: VNINBR
+Policy rate: VNINTR
+3) Methodology (Khung định lượng)
+3.1. 3 Factors (Chuẩn nghiên cứu)
+Level: (2Y + 5Y + 10Y) / 3
+Slope: 10Y − 2Y
+Curvature: 2*5Y − 2Y − 10Y
+Ý nghĩa:
+Level: mặt bằng lãi suất dài hạn/chi phí vốn chung
+Slope: kỳ vọng tăng trưởng/lạm phát và trạng thái chu kỳ (steep/flat/inverted)
+Curvature: biến dạng “bụng” (belly) – phản ứng chính sách & lực cung–cầu kỳ hạn trung bình
+3.2. Robust Statistics
+Robust z-score: dùng winsorization (clip outliers bằng mean±k*std), sau đó tính z-score lại.
+Percentile rank: ta.percentrank() trong cửa sổ len_stats.
+Mục đích: giảm nhiễu outlier và đánh giá “cao/thấp so với lịch sử”.
+3.3. Momentum / Derivative
+level_d, slope_d, curve_d: thay đổi trong len_deriv ngày để đọc xu hướng (UP/DN).
+4) Regime Framework (Khung chế độ YC)
+4.1. Level regime (theo percentile)
+LOW / MID / HIGH theo ngưỡng low_th_pct và high_th_pct.
+4.2. Slope regime
+Nếu slope <= -0.2 → INVERTED
+Còn lại phân theo percentile: STEEP_LOW / FLAT / STEEP_HIGH
+4.3. YC Regime Code (YC1–YC4)
+YC4 (Tight): Level HIGH + Flat/Inverted
+YC3 (Late tightening): Level HIGH + Steep_high
+YC2 (Early easing): Level LOW + Steep_high
+YC1 (Easing mature): Level LOW + Flat/Steep_low
+YC0: trường hợp còn lại (Neutral/Mixed)
+Các “code” là cách chuẩn hoá để báo cáo & so sánh theo thời gian, dễ dùng cho research note.
+5) Stress Score (Chỉ số áp lực)
+5.1. Logic
+Level component: dùng level_pct (hoặc 50 nếu NA)
+Slope risk: nếu slope <= 0 → 100 (rủi ro cao), nếu dương → 100 - slope_pct
+Macro stress: trung bình của 2 thành phần
+5.2. Stress regime
+>= 70 → STRESS CAO
+<= 40 → STRESS THAP
+còn lại → TRUNG TINH
+5.3. Stress overlay (mapped)
+Stress (0–100) được map vào khoảng yield [min..max] trong len_stats để vẽ chung trục mà không làm “crush” chart.
+Đây là “visual gauge”, không phải series cùng đơn vị với yield.
+6) Distortion & Signal Quality (Độ méo & chất lượng tín hiệu)
+6.1. Distortion
+Tính độ phân tán của z-score giữa các tenor (std-like).
+Thấp → curve dịch chuyển “thuần” (parallel move)
+Cao → biến dạng cục bộ (segmented/distorted)
+6.2. Quality score
+Chuyển distortion thành thang 0–100:
+HIGHQ / MEDQ / LOWQ
+Khi LOWQ, script sẽ đưa thông điệp “Noisy -> avoid strong conclusion”.
+7) UI / UX (Bloomberg-like, Multi-Panel)
+Panel 1 — Shape Dashboard
+Tập trung “big picture”: Level/Slope/Curve, YC regime, Stress bar, Quality
+Có Curve snapshot (đường cong dạng “mini curve” bên phải)
+Panel 2 — Heatmap Grid
+Trọng tâm: trạng thái từng tenor:
+STATE (percentile)
+VALUATION (z-score bucket)
+MOVE (UP/DN)
+STRUCTURE: shift/focus/quality
+Panel 3 — Diagnostics (Meaning-first)
+Đưa “ý nghĩa” lên trước số:
+Stress + regime + quality + momentum + shift
+8) Inputs (Gợi ý cấu hình)
+len_stats: 120–252 (tuỳ độ dài dữ liệu)
+low_th_pct / high_th_pct: 20/80 là mặc định “academic heuristic”
+len_change: 20–60 ngày (1–3 tháng)
+len_deriv: 3–10 ngày (momentum)
+9) Practical Notes / Limitations
+Pine không phù hợp cho tối ưu hoá phi tuyến (Nelson–Siegel full fit), nên curvature là xấp xỉ.
+Dữ liệu yield trên TradingView có thể:
+khác nguồn
+thiếu lịch sử
+có gaps
+→ Khi dữ liệu ngắn, percentile/zscore sẽ NA hoặc kém ổn định.
+Stress overlay là mapped visualization, dùng để “nhìn nhanh” chứ không cùng đơn vị.
+10) Roadmap đề xuất (V1 → V2)
+Thêm “dynamic threshold” theo phân phối (z-based) và so sánh với percentile.
+Thêm module research: correlation rolling với VNINDEX / Credit / FX (nếu dư request.security).
+Thêm “event tags”: pivot points khi YC regime đổi, stress vượt ngưỡng.
+Export-friendly table mode (compact) cho chụp ảnh.
+11) Changelog (tóm tắt)
+v1.4.2
+Panel 2/3 khôi phục time-series (không còn “trống chart” khi đổi panel)
+Bổ sung Stress overlay mapped để tăng tính trực quan mà không cần plot(scale=...)
+Label line chỉ hiển thị tên ticker theo yêu cầu
+
+Research Interpretation Guide (How to Read VN YieldCurveLab)
+Mục tiêu của guide này là giúp bạn chuyển từ “thấy số” → “hiểu trạng thái” → “đặt câu hỏi nghiên cứu đúng”.
+1) Trình tự đọc (workflow 20 giây)
+Quality trước (HIGHQ/MEDQ/LOWQ)
+LOWQ = đường cong “méo/segmented”, tín hiệu nhiễu.
+→ Giảm mức tự tin, ưu tiên quan sát thêm (không kết luận mạnh).
+HIGHQ = dịch chuyển “thuần” hơn (parallel/clean), dễ đọc regime.
+YC Regime (YC1–YC4) = “khung bối cảnh”
+Đây là nhãn tóm tắt cấu trúc: Level + Slope.
+Stress (0–100) = “cường độ”
+Stress cao không chỉ nói “xấu”, mà nói: môi trường nhạy cảm (risk of shocks / policy tightening).
+Shift + Focus (Panel 2/3)
+FLATTENING / STEEPENING và SHORT/BELLY/LONG cho biết điểm nóng nằm ở đâu trên curve.
+2) Ý nghĩa 3 nhân tố (đọc như macro lens)
+Level = mặt bằng chi phí vốn
+Câu hỏi nghiên cứu: Khi Level lên “HIGH”, nhóm tài sản nào nhạy nhất? (BĐS? smallcap? bank?)
+Slope (10–2) = trạng thái chu kỳ & kỳ vọng tăng trưởng
+Câu hỏi nghiên cứu: slope giảm/flat có đi trước các giai đoạn giảm kỳ vọng/siết thanh khoản không?
+Curvature = “bụng curve” (kỳ hạn trung gian) phản ánh kỳ vọng chính sách + lực cung cầu
+Câu hỏi nghiên cứu: curvature bất thường có liên quan tới thay đổi chính sách/OMO/tín phiếu không?
+3) Cách diễn giải YC Regime (không dự báo, chỉ hypothesis)
+Lưu ý: đây là “research hypothesis”, không phải khuyến nghị.
+YC4 — Tight: High Level + Flat/Inverted
+Thông điệp: chi phí vốn cao + curve không dốc (hoặc đảo).
+Giả thuyết: môi trường rủi ro “tight/fragile”, dễ nhạy với news/policy.
+Theo dõi thêm: Stress có >70 không? Focus nằm ở SHORT hay LONG? Nếu SHORT bị kéo lên mạnh → dấu hiệu thắt chặt mạnh hơn.
+YC3 — Late tightening: High Level + Steep
+Thông điệp: level đã cao, nhưng slope còn dốc → kỳ vọng/term premium vẫn lớn.
+Giả thuyết: thị trường đang “định giá rủi ro” hoặc kỳ vọng lãi còn biến động.
+Theo dõi thêm: curve_shift có đang FLATTENING không? Nếu flattening dần → tiến tới YC4.
+YC2 — Early easing: Low Level + Steep
+Thông điệp: mặt bằng thấp, slope dốc → thường gặp khi kỳ vọng hồi phục/đi vào chu kỳ nới.
+Giả thuyết: môi trường có thể “risk-on” hơn, nhưng vẫn cần xác nhận.
+Theo dõi thêm: Stress có giảm về vùng 40–50 không? Quality phải MEDQ/HIGHQ thì kết luận mới đáng tin.
+YC1 — Easing mature: Low Level + Flat
+Thông điệp: level thấp, slope phẳng → giai đoạn nới đã “phản ánh nhiều”.
+Giả thuyết: upside của “nới lỏng” có thể giảm dần; thị trường nhạy với dữ liệu mới.
+Theo dõi thêm: momentum (level_d/slope_d) đổi chiều chưa? nếu level bắt đầu UP + slope DOWN → chuyển pha.
+YC0 — Neutral/Mixed
+Thông điệp: không thuộc nhóm “cực trị”, cần đọc thêm shift/focus/quality.
+Cách làm: nhìn Panel 2 xem tenor nào bị “DISTORTED” và shift đang hướng nào.
+4) Stress Score: diễn giải “đúng chất học thuật”
+Stress không nói “thị trường sập”, nó nói:
+độ nhạy (sensitivity) của hệ thống đang tăng hay giảm.
+Stress cao + YC4 + Quality tốt → “risk regime rõ ràng” (môi trường dễ bị shock).
+Stress cao nhưng LOWQ → “nhiễu/segmented” (cẩn thận kết luận: có thể do data gaps, event đơn lẻ).
+5) Distortion / Quality: Khi nào nên “tin” curve?
+PURE MOVE + HIGHQ: curve dịch chuyển khá đồng bộ → regime đọc đáng tin.
+DISTORTED + LOWQ: chỉ một vài tenor lệch mạnh → có thể:
+thiếu thanh khoản cục bộ,
+cú sốc supply/demand ở một kỳ hạn,
+dữ liệu nguồn có vấn đề.
+→ Khi đó, panel 2 (grid) quan trọng hơn panel 1.
+6) “Research Questions” gợi ý (đúng hướng Academic)
+Bạn có thể dùng script để tạo note nghiên cứu theo các câu hỏi:
+Regime transitions: YC2→YC3→YC4 có diễn ra theo chu kỳ VN không? thời gian trung bình mỗi pha?
+Stress threshold: Stress >70 có đi kèm widening credit spread / áp lực FX không?
+Focus mapping: SHORT/BELLY/LONG focus có liên hệ với hành động chính sách (OMO/tín phiếu/điều hành) không?
+Signal quality filter: Nếu chỉ xét HIGHQ, hiệu quả mô tả regime có “sạch” hơn không?
